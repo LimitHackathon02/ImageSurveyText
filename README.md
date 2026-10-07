@@ -15,8 +15,8 @@ sh scripts/start.sh
 팀원이 새로 받는 경우에는 아래 순서로 실행합니다.
 
 ```sh
-git clone https://github.com/LimitHackathon02/LH02_Backend.git
-cd LH02_Backend
+git clone https://github.com/LimitHackathon02/ImageSurveyText.git
+cd ImageSurveyText
 sh scripts/start.sh
 ```
 
