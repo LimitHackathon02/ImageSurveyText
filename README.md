@@ -2,6 +2,8 @@
 
 이미지 분석 → 객관식 설문 → 사용자 답변 → 맞춤 글 생성을 연결한 Python + FastAPI 백엔드입니다. 주제 변경은 `profiles/*.json`, 단계별 지시문 변경은 `survey_prompts.json`에서 합니다. 실행 시 다른 AI 서비스를 호출하지 않으며 HyperCLOVA X REST API만 사용합니다. 기본값은 외부 호출 없는 **모의 실행**입니다. 기존 일반 텍스트·이미지·문서 API도 함께 제공합니다.
 
+**하루의 사진 여러 장과 설문 답변으로 일기 한 편을 만드는 흐름**을 제공합니다. `diary` 설정은 사진 1~5장, 질문 4개, 약 800자의 일기 초안이 기본값입니다. 기획과 수정할 항목은 [DIARY_BACKEND_PLAN.md](DIARY_BACKEND_PLAN.md), 다른 주제로 바꾸는 방법은 [TOPIC_ADAPTATION_GUIDE.md](TOPIC_ADAPTATION_GUIDE.md)를 참고하세요.
+
 사용자 설명상 대회는 사전 준비가 기본적으로 금지되어 있습니다. **이 프로젝트는 사전 학습·연결 연습용입니다. 코드·설정·가이드의 반입 및 제출물 재사용이 허용된다고 가정하지 않습니다.** 현장에서 직접 작성할 최소 흐름은 `FIELD_GUIDE.md`에 정리했습니다.
 
 ## 바로 실행
@@ -45,13 +47,14 @@ Copy-Item .env.example .env  # 처음 한 번만: 기존 .env가 있으면 생�
 
 ```sh
 .venv/bin/python scripts/survey_demo.py
+.venv/bin/python scripts/survey_demo.py --profile diary --date 2026-10-08 --interactive
 .venv/bin/python scripts/survey_demo.py --profile study --interactive
 ```
 
-모의 실행에서 이미지를 생략하면 연습용 빈 이미지를 사용합니다. 모의 설문과 글은 설정과 선택한 답변을 반영해 조립하지만 실제 사진을 이해하거나 AI가 글을 작성한 결과는 아닙니다. 실제 모드에서는 이미지 경로를 지정합니다.
+CLI의 기본 profile은 `diary`입니다. 모의 실행에서 이미지를 생략하면 연습용 빈 이미지를 사용합니다. 모의 설문과 글은 설정과 선택한 답변을 반영해 조립하지만 실제 사진을 이해하거나 AI가 글을 작성한 결과는 아닙니다. 실제 모드에서는 이미지 경로를 지정합니다. 여러 장이면 `--image`를 반복합니다.
 
 ```sh
-.venv/bin/python scripts/survey_demo.py --image ./photo.jpg --profile default --interactive
+.venv/bin/python scripts/survey_demo.py --image ./lunch.jpg --image ./walk.jpg --profile diary --date 2026-10-08 --interactive
 ```
 
 Swagger의 **이미지 설문** 묶음에서 직접 호출해도 됩니다. Windows 기본 Python에서는 `.venv/bin/python` 대신 `.venv\Scripts\python`을 사용하세요.
@@ -59,13 +62,25 @@ Swagger의 **이미지 설문** 묶음에서 직접 호출해도 됩니다. Wind
 | 순서 | API | 입력·결과 |
 |---|---|---|
 | 설정 조회 | `GET /api/survey-profiles` | 선택할 주제 ID와 설정 목록 |
-| 1 | `POST /api/image-surveys` | multipart `image`, `profile_id` → 분석 JSON, `survey.questions`, `session_id` |
+| 1 | `POST /api/image-surveys` | multipart `images` 반복, `profile_id`, `entry_date` → 사진별 분석, `survey.questions`, `session_id` |
 | 2 | `PUT /api/image-surveys/{session_id}/answers` | 설문 버전과 선택 ID → 답변 저장, `answers_revision` |
 | 3 | `POST /api/image-surveys/{session_id}/generate` | 답변 버전 → `text`, 분량 상태, `generation_id` |
 | 조회 | `GET /api/image-surveys/{session_id}` | 분석·설문·답변·현재 결과·생성 이력 |
 | 복구 | `POST /api/image-surveys/{session_id}/retry` | 이미지 분석 또는 설문 생성 실패 단계 재시도 |
 
-1단계에서 질문 전체를 미리 생성합니다. 화면에서는 하나씩 보여 주면 됩니다. 정상 흐름의 실제 AI 호출은 이미지 분석 1회, 설문 생성 1회, 글 생성 1회입니다. 답변 저장에는 AI를 호출하지 않습니다. 상태가 `NEEDS_IMAGE`면 분석 사유를 보여 주고 다른 사진으로 새 세션을 만드세요.
+업로드 예시입니다. 날짜는 실제 기록할 날짜로 바꾸세요.
+
+```sh
+curl -X POST http://localhost:8000/api/image-surveys \
+  -F 'images=@./lunch.jpg' -F 'images=@./walk.jpg' \
+  -F 'profile_id=diary' -F 'entry_date=2026-10-08'
+```
+
+기존 한 장 입력인 `image`도 지원하며 `images`와 함께 보내면 422입니다. API의 `profile_id` 생략 기본값은 기존 `default`이고, 일기에는 `diary`를 지정합니다. `entry_date`는 `YYYY-MM-DD` 형식이며 생략하면 서버의 한국 날짜를 사용합니다. 과거 일기는 날짜를 직접 선택하세요. 같은 날짜여도 새 업로드는 새 세션입니다.
+
+사진은 기본 최대 5장, 한 장 최대 10MB, 전체 최대 25MB입니다. profile의 `image.max_images`, `max_upload_mb`, `max_total_upload_mb`로 바꿉니다. 사진별 분석은 `images`에 저장되며 `analysis.images`는 사용 가능한 사진들, `analysis.excluded_images`는 제외한 사진과 이유입니다. 관찰 ID는 각 `image_id` 안에서 해석합니다. 업로드 순서는 사건의 시간 순서로 간주하지 않습니다.
+
+1단계에서 사진 전체로 질문 목록을 한 번 생성합니다. 화면에서는 하나씩 보여 주면 됩니다. 캐시가 없는 정상 흐름의 실제 AI 호출은 **사진 N장 분석 N회 + 설문 1회 + 글 1회**입니다. 사진 3장이면 5회입니다. 답변 저장에는 AI를 호출하지 않습니다. 모든 사진이 사용 불가능하면 `NEEDS_IMAGE`이며 다른 사진으로 새 세션을 만드세요. 일부만 사용 가능하면 해당 사진들로 진행하고 제외 사유를 반환합니다.
 
 답변 저장 요청 예시는 다음과 같습니다. 전체 답변 교체 방식이므로 부분 저장 시 기존 답변도 함께 보내세요. 필수 질문을 모두 답해야 글을 생성할 수 있습니다.
 
@@ -81,17 +96,17 @@ Swagger의 **이미지 설문** 묶음에서 직접 호출해도 됩니다. Wind
 
 글 생성 요청은 `{"answers_revision": 1}`입니다. 실제 요청에는 답변 저장 응답의 버전을 사용하세요. 같은 답변 버전에 대해 다시 요청하면 생성 결과를 재사용하고 `reused: true`를 반환합니다. 이 경우 `usage`는 원본 생성 당시 사용량이며 새 호출이 발생하지 않습니다. 답변을 변경하면 버전이 올라가고 이전 결과는 현재 결과에서 제외됩니다.
 
-`output.target_chars`는 공백·줄바꿈·제목을 포함한 `len(text)` 기준입니다. 기본값은 1,500자 ±20%입니다. 길이는 모델 요청만으로 보장되지 않으므로 서버가 측정해 `COMPLETED` 또는 `NEEDS_REVIEW`를 반환합니다. 글이 토큰 제한으로 잘리면 `GENERATION_FAILED`이며 완료 결과로 반환하지 않습니다.
+`output.target_chars`는 공백·줄바꿈·제목을 포함한 `len(text)` 기준입니다. 일기 설정은 800자 ±20%, 기존 `default`는 1,500자 ±20%입니다. 길이는 모델 요청만으로 보장되지 않으므로 서버가 측정해 `COMPLETED` 또는 `NEEDS_REVIEW`를 반환합니다. 정보가 부족한 일기는 사실성을 우선해 짧게 생성하고 검토 대상으로 표시할 수 있습니다. 글이 토큰 제한으로 잘리면 `GENERATION_FAILED`이며 완료 결과로 반환하지 않습니다.
 
 완료된 원본 글을 한 번 재작성하려면 `{"answers_revision": 1, "rewrite_of": "원본 generation_id"}`를 보냅니다. 같은 재작성 요청은 재사용하며 재작성 결과를 다시 재작성하는 것은 거절합니다. 실패한 생성은 같은 요청으로 명시적으로 재시도할 수 있고 자동 재호출은 없습니다.
 
-생성 요청 중에는 중복 생성·답변 수정을 409로 거절합니다. 세션 생성에 `Idempotency-Key` 헤더를 지정하고 재전송 시 같은 키를 유지하면 중복 세션을 방지합니다. 실패 응답의 `detail`에는 `session_id`와 실패 상태가 들어갑니다. `ANALYSIS_FAILED` 재시도에는 원래 `image`를 다시 업로드하고, `SURVEY_FAILED`는 파일 없이 `/retry`를 호출합니다. 정상 분석 정보는 재사용합니다.
+생성 요청 중에는 중복 생성·답변 수정을 409로 거절합니다. 세션 생성에 `Idempotency-Key` 헤더를 지정하고 재전송 시 같은 키·사진 순서·날짜를 유지하면 중복 세션을 방지합니다. 실패 응답의 `detail`에는 `session_id`와 실패 상태, 해당 사진이 있으면 `image_id`가 들어갑니다. `ANALYSIS_FAILED` 재시도에는 원래 사진 **전체를 같은 순서로** 다시 업로드합니다. 이미 성공한 분석은 재사용하고 실패·미처리 사진만 호출합니다. 원본 사진을 저장하지 않으므로 프론트엔드가 재시도용 파일을 유지해야 합니다. `SURVEY_FAILED`는 파일 없이 `/retry`를 호출합니다. 날짜·사진을 바꾸려면 새 세션을 만드세요.
 
-SQLite에는 세션·설문·답변·설정과 프롬프트 스냅샷·글·사용량이 저장됩니다. 원본 이미지는 저장하지 않습니다. 서버 재시작 후 진행 중이던 작업은 실패 상태로 복구됩니다. **단일 서버 프로세스**로 실행해야 하며 `--workers`나 중복 서버를 사용하면 시작 시 복구가 다른 서버의 작업에 영향을 줄 수 있습니다. MOCK_MODE를 전환하면 기존 세션을 이어 쓰지 말고 새 세션을 만드세요.
+SQLite에는 일기 날짜·사진별 해시와 분석·세션·설문·답변·설정과 프롬프트 스냅샷·글·사용량이 저장됩니다. 원본 이미지는 저장하지 않습니다. 서버 재시작 후 진행 중이던 작업은 실패 상태로 복구되며 완료된 사진 분석은 유지됩니다. 기존 한 장 세션도 조회·재시도할 수 있고, 당시 기록하지 않은 일기 날짜는 `null`입니다. **단일 서버 프로세스**로 실행해야 하며 `--workers`나 중복 서버를 사용하면 시작 시 복구가 다른 서버의 작업에 영향을 줄 수 있습니다. MOCK_MODE를 전환하면 기존 세션을 이어 쓰지 말고 새 세션을 만드세요.
 
 ## 주제와 로직을 수정하는 위치
 
-`profiles/default.json`은 생활 공간 예시(질문 5개, 글 1,500자), `profiles/study.json`은 학습 예시(질문 3개, 선택지 4개, 글 1,200자)입니다. 새 JSON을 복사한 뒤 고유 `id`를 정하고 서버를 재시작하면 `/api/survey-profiles`에 표시됩니다. 새 세션의 `profile_id`로 선택하세요. 기존 세션은 저장한 설정 스냅샷을 사용합니다.
+`profiles/diary.json`은 하루 일기(질문 4개, 선택지 4개, 글 800자), `profiles/default.json`은 생활 공간 예시(질문 5개, 글 1,500자), `profiles/study.json`은 학습 예시(질문 3개, 선택지 4개, 글 1,200자)입니다. 모든 주제에서 여러 사진을 지원합니다. 새 JSON을 복사한 뒤 고유 `id`를 정하고 서버를 재시작하면 `/api/survey-profiles`에 표시됩니다. 새 세션의 `profile_id`로 선택하세요. 기존 세션은 저장한 설정 스냅샷을 사용합니다.
 
 | 바꾸고 싶은 항목 | 수정 위치 |
 |---|---|
@@ -160,6 +175,23 @@ SQLite에는 세션·설문·답변·설정과 프롬프트 스냅샷·글·사�
 ## 팀 프론트엔드 연결
 
 `examples/frontend.js`를 복사해 사용하세요. CLOVA API 키는 서버 `.env`에만 저장합니다. 프론트엔드 주소는 `.env`의 `CORS_ORIGINS`에 추가합니다. 다른 기기에서 접근하려면 아래 명령으로 실행하고 `BASE`를 서버 컴퓨터의 LAN IP로 변경하세요.
+
+사진 일기는 다음 함수 순서로 연결합니다. `files`는 `<input type="file" multiple>`의 `files`, `entryDate`는 날짜 선택 input의 `YYYY-MM-DD` 값입니다.
+
+```js
+import {createDiarySurvey, saveSurveyAnswers, generateSurveyText} from "./frontend.js";
+
+// 새 사진 묶음마다 새 키를 만들고, 업로드 재전송 시에는 같은 키를 유지하세요.
+const requestKey = crypto.randomUUID();
+const session = await createDiarySurvey(files, entryDate, requestKey);
+// session.survey.questions를 화면에 표시하고 사용자가 답할 때까지 기다립니다.
+// selectedAnswers = [{question_id: "q_1", option_id: "q_1_o_2"}, ...]
+const saved = await saveSurveyAnswers(session.session_id, session.survey_revision, selectedAnswers);
+const diary = await generateSurveyText(session.session_id, saved.answers_revision);
+// diary.text와 diary.entry_date를 화면에 표시합니다.
+```
+
+`NEEDS_IMAGE`일 때는 설문을 표시하지 말고 다른 사진을 요청하세요. 일부 사진만 제외됐으면 `session.analysis.excluded_images`의 이유를 표시하세요. 실패한 분석은 `retryImageSurvey(sessionId, originalFiles)`, 설문 실패는 `retryImageSurvey(sessionId)`로 재시도합니다. 화면에 일기를 직접 수정하는 기능을 붙일 수 있지만, 수정본의 서버 저장 API와 회원별 일기 목록은 아직 없습니다.
 
 ```sh
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

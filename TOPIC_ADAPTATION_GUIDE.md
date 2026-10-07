@@ -4,16 +4,18 @@
 
 내일의 기본 작업은 **주제별 설정을 바꾸고, 실제 사진과 답변으로 결과를 확인하는 것**이다. 이 문서는 바꿀 파일·변수·로직과 확인 순서를 정리한다. 현재 연결 흐름은 모의 실행과 공급자 응답 대역으로 검증했으며, 실제 HyperCLOVA X의 분석·설문·글 품질은 지급 API로 확인해야 한다.
 
+원래 아이디어인 ‘사진 여러 장 → 하루 일기 한 편’은 `profiles/diary.json`으로 구현했다. 기본 사진 1~5장, 전체 질문 4개, 약 800자이며 일기 날짜를 전달할 수 있다. 기획과 남은 확장 범위는 [DIARY_BACKEND_PLAN.md](DIARY_BACKEND_PLAN.md)를 따른다.
+
 ## 1. 시간이 없으면 이 순서대로
 
 1. 최종 결과를 한 문장으로 정한다: **“[사용자]가 [사진]과 [설문 답변]을 제공하면 [어떤 글]을 받아 [어떤 행동]을 할 수 있다.”**
-2. `profiles/default.json`을 새 JSON으로 복사하고 주제·대상·글의 목적을 바꾼다.
+2. 일기 용도는 `profiles/diary.json`, 다른 범용 용도는 `profiles/default.json`을 새 JSON으로 복사하고 주제·대상·글의 목적을 바꾼다.
 3. 사진에서 볼 내용, 설문으로 알아낼 내용, 결과 글의 목차를 바꾼다.
 4. `.env`에 지급 키·모델·주소를 설정한다. 우선 모의 실행으로 연결을 확인한다.
 5. 서버를 재시작하고 **새 profile_id·새 세션**으로 실행한다.
 6. 실제 모드에서 같은 사진에 서로 다른 답변을 골라 결과가 달라지는지 확인한다.
 
-가장 먼저 읽고 수정할 파일은 `profiles/default.json`이다. 이미지→설문→답변→글의 호출 순서를 바꾸려면 `app/survey.py`를 읽는다.
+일기 용도에서 가장 먼저 읽고 수정할 파일은 `profiles/diary.json`이다. 이미지→설문→답변→글의 호출 순서를 바꾸려면 `app/survey.py`를 읽는다. 일기의 slots는 `main_memory`(핵심 장면), `companionship`(주로 함께한 사람), `emotion`(감정), `personal_meaning`(개인적인 의미)다.
 
 ## 2. 주제 공개 직후 팀과 정할 내용
 
@@ -61,7 +63,9 @@
 | `output.length_tolerance_ratio` | 0.2 | 0 이상 1 미만, 0.2는 ±20% |
 | 각 단계 `max_tokens` | 이미지 1024 / 설문 2048 / 글 3072 | 현재 코드에서 1~4096 |
 | 각 단계 `temperature` | 이미지·설문 0 / 글 0.3 | 0~1, 높을수록 결과의 다양성이 커짐 |
-| `image.max_upload_mb` | 10 | 1~20, 업로드 허용 용량 |
+| `image.max_images` | 5 | 1~10, 업로드 사진 개수 상한 |
+| `image.max_upload_mb` | 10 | 1~20, 사진 한 장의 업로드 허용 용량(MB) |
+| `image.max_total_upload_mb` | 25 | 1~100, 전체 사진의 업로드 허용 용량(MB) |
 | `image.resize_long_edge` | 1280 | 32~2240, 전송 이미지의 긴 변 최대 길이 |
 
 자주 할 수정은 다음과 같다.
@@ -73,6 +77,8 @@
 - **목차 바꾸기:** `sections`의 ID·제목·순서를 수정한다. 서버가 같은 순서로 조립하고 모델 결과의 ID도 검사한다.
 
 `target_chars`와 `max_tokens`는 단위가 다르다. 길이를 늘리기 위해 max_tokens만 바꾸면 글의 목표 분량은 바뀌지 않는다. 분량은 제목·섹션 제목·본문·공백·줄바꿈을 모두 합친 `len(text)`로 계산한다. 1,500자 ±20%라면 1,200~1,800자가 완료 범위다.
+
+위 표의 질문 수·분량은 기존 `default` 기준이다. `diary`는 질문 4개, 선택지 4개, 목표 800자(640~960자)다. 여러 사진을 올려도 질문 수는 전체 묶음 기준이며 사진마다 곱하지 않는다. `entry_date`는 API 입력이지 profile 값이 아니므로 프론트의 날짜 선택으로 전달한다. 날짜를 생략하면 서버의 한국 날짜를 사용한다.
 
 ## 5. 복사해서 수정할 완성 예시
 
@@ -157,7 +163,7 @@ JSON은 문자열에 큰따옴표를 쓰고 마지막 항목 뒤에는 쉼표를
 
 모델명·주소를 변경해도 인증 헤더나 응답 형식까지 자동 변환되지는 않는다. 대회 전용 프록시 등 일반 v3 REST 형식과 다르면 `app/provider.py`와 `app/engine.py`의 요청 파라미터도 확인한다. 누적 토큰 중단 기준은 실제 과금 상한을 보장하지 않으며 사용량 미확인 호출도 `/api/usage`에서 확인한다.
 
-프론트엔드 담당자는 `examples/frontend.js`의 `BASE`, `TEAM_KEY`와 `createImageSurvey`에 전달하는 `profileId`를 맞춘다. `CORS_ORIGINS`는 브라우저 접근 허용 주소이며 서버를 다른 기기에서 접근 가능하게 여는 설정은 별도다.
+프론트엔드 담당자는 `examples/frontend.js`의 `BASE`, `TEAM_KEY`를 맞춘다. 일기는 `createDiarySurvey(files, entryDate, requestKey)`, 다른 주제는 `createImageSurvey(files, profileId, requestKey, entryDate)`를 쓴다. `files`는 File 배열이나 다중 선택 input의 FileList다. 생성된 설문을 표시한 뒤 전체 선택 답변을 저장하고, 반환된 답변 버전으로 글을 생성한다. 상세 예제는 README의 ‘팀 프론트엔드 연결’을 따른다. `CORS_ORIGINS`는 브라우저 접근 허용 주소이며 서버를 다른 기기에서 접근 가능하게 여는 설정은 별도다.
 
 ## 8. 수정 후 실행·확인 순서
 
@@ -184,6 +190,7 @@ sh scripts/start.sh
 
 ```sh
 .venv/bin/python scripts/survey_demo.py --profile event_edu --interactive
+.venv/bin/python scripts/survey_demo.py --profile diary --date 2026-10-08 --interactive
 ```
 
 ### D. 실제 사진으로 품질 확인
@@ -192,9 +199,10 @@ sh scripts/start.sh
 
 ```sh
 .venv/bin/python scripts/survey_demo.py --image ./photo.jpg --profile event_edu --interactive
+.venv/bin/python scripts/survey_demo.py --image ./lunch.jpg --image ./walk.jpg --profile diary --date 2026-10-08 --interactive
 ```
 
-모의 글은 목표 분량에 맞춰 예시 문장을 조립하므로 실제 글 품질을 확인하는 용도로 사용하지 않는다. 실제 모드의 정상 흐름은 기본 3회 호출이다. 분석·설문 캐시나 이미 생성한 결과 재사용으로 실제 추가 호출 수는 줄어들 수 있다.
+모의 글은 목표 분량에 맞춰 예시 문장을 조립하므로 실제 글 품질을 확인하는 용도로 사용하지 않는다. 실제 모드의 정상 흐름은 사진 N장의 분석 N회 + 설문 1회 + 글 1회다. 한 장이면 3회, 세 장이면 5회다. 분석·설문 캐시나 이미 생성한 결과 재사용으로 실제 추가 호출 수는 줄어들 수 있다.
 
 **설정을 바꾼 뒤에는 새 세션을 만든다.** 기존 세션은 설정·프롬프트 스냅샷을 저장하고, 같은 답변 버전의 생성 요청은 기존 결과를 반환한다. 변경된 설정을 검사하려고 기존 세션에서 `/retry`만 누르면 의도와 다른 결과를 볼 수 있다. 새 업로드에는 새 Idempotency-Key를 사용한다.
 
@@ -239,12 +247,13 @@ sh scripts/start.sh
 | 504 | 공급자 지연·네트워크·타임아웃 | 무조건 반복 호출하지 말고 실패 상태와 사용량 확인 |
 | 브라우저만 호출 실패 | BASE, CORS_ORIGINS, X-Team-Key, 서버 접근 주소 | 프론트엔드와 서버 설정 맞추기 |
 
-기존 설정 그대로 일시적인 실패만 복구할 때는 `ANALYSIS_FAILED`에 원래 이미지를 넣어 `/retry`, `SURVEY_FAILED`에는 파일 없이 `/retry`를 호출한다. `GENERATION_FAILED`는 같은 답변 버전으로 `/generate`를 명시적으로 다시 호출한다.
+기존 설정 그대로 일시적인 실패만 복구할 때는 `ANALYSIS_FAILED`에 원래 사진 전체를 같은 순서로 넣어 `/retry`, `SURVEY_FAILED`에는 파일 없이 `/retry`를 호출한다. 완료된 사진 분석은 재호출하지 않는다. 원본 파일은 서버에 보관하지 않으므로 프론트가 재시도용으로 유지한다. `GENERATION_FAILED`는 같은 답변 버전으로 `/generate`를 명시적으로 다시 호출한다.
 
 ## 11. 시연 전 완료 확인
 
 - [ ] 실제 대상 사용자·사진·설문 목적·최종 글의 용도를 한 문장으로 설명할 수 있다.
 - [ ] 선택한 profile의 질문 수와 선택지 수가 화면에 반영된다.
+- [ ] 여러 사진이 하나의 설문·결과 글에 함께 반영되고 선택한 일기 날짜가 유지된다.
 - [ ] 같은 사진에 다른 답변을 선택하면 글 내용이 그 답변을 반영해 달라진다.
 - [ ] 사진 속 관찰과 추측을 구분하고, 읽히지 않은 정보를 사실처럼 보충하지 않는다.
 - [ ] 필수 답변을 모두 저장한 뒤 글을 생성한다.

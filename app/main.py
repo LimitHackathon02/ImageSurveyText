@@ -1,4 +1,5 @@
 import hmac
+from datetime import date
 from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -7,7 +8,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
 from .engine import Engine
-from .images import image_data_uri
+from .images import image_data_uri, read_survey_uploads
 from .settings import Settings
 from .survey import SurveyService
 from .survey_models import AnswersRequest, GenerateRequest
@@ -49,8 +50,8 @@ def create_app(settings=None):
     settings = settings or Settings.from_env()
     engine = Engine(settings)
     surveys = SurveyService(engine)
-    app = FastAPI(title="HyperCLOVA X 해커톤 백엔드", version="1.0.0",
-                  description="주제별 tasks.json 설정으로 재사용하는 텍스트·이미지·문서 질문 API. MOCK 응답은 고정 예시입니다.")
+    app = FastAPI(title="HyperCLOVA X 사진 일기·설문 백엔드", version="1.1.0",
+                  description="여러 사진과 설문 답변으로 하루 일기 한 편을 생성합니다. profiles로 주제를 바꿀 수 있으며 일반 텍스트·이미지·문서 API도 제공합니다. MOCK은 연결 확인용입니다.")
     app.state.engine = engine
     app.state.surveys = surveys
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins),
@@ -67,11 +68,12 @@ def create_app(settings=None):
         return list(surveys.profiles.values())
 
     @app.post("/api/image-surveys", status_code=201, tags=["이미지 설문"], **api)
-    async def survey_create(image: UploadFile = File(...), profile_id: str = Form("default", max_length=40),
+    async def survey_create(image: UploadFile | None = File(default=None), images: list[UploadFile] | None = File(default=None),
+                            profile_id: str = Form("default", max_length=40), entry_date: date | None = Form(default=None),
                             idempotency_key: str | None = Header(default=None, min_length=1, max_length=150)):
         profile = surveys.get_profile(profile_id)
-        raw = await image.read(profile["image"]["max_upload_mb"] * 1024 * 1024 + 1)
-        return await surveys.create(raw, profile_id, idempotency_key)
+        raws = await read_survey_uploads(image, images, profile["image"])
+        return await surveys.create(raws, profile_id, idempotency_key, entry_date)
 
     @app.get("/api/image-surveys/{session_id}", tags=["이미지 설문"], **api)
     async def survey_get(session_id: str):
@@ -86,12 +88,13 @@ def create_app(settings=None):
         return await surveys.generate(session_id, body)
 
     @app.post("/api/image-surveys/{session_id}/retry", tags=["이미지 설문"], **api)
-    async def survey_retry(session_id: str, image: UploadFile | None = File(default=None)):
-        raw = None
-        if image is not None:
+    async def survey_retry(session_id: str, image: UploadFile | None = File(default=None),
+                           images: list[UploadFile] | None = File(default=None)):
+        raws = None
+        if image is not None or images:
             session = surveys.repo.get(session_id)
-            raw = await image.read(session["profile"]["image"]["max_upload_mb"] * 1024 * 1024 + 1)
-        return await surveys.retry(session_id, raw)
+            raws = await read_survey_uploads(image, images, session["profile"]["image"])
+        return await surveys.retry(session_id, raws)
 
     @app.get("/", include_in_schema=False)
     async def index():

@@ -1,12 +1,14 @@
 {
   "id": "default",
-  "version": 1,
+  "version": 2,
   "domain": "생활 공간",
   "audience": "공간을 개선하려는 사용자",
   "objective": "사진과 사용자 답변을 반영한 실천 계획 작성",
   "image": {
     "focus": "공간의 구성과 보이는 물건을 관찰한다.",
+    "max_images": 5,
     "max_upload_mb": 10,
+    "max_total_upload_mb": 25,
     "resize_long_edge": 1280,
     "max_tokens": 1024,
     "temperature": 0

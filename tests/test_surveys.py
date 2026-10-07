@@ -2,6 +2,7 @@ import asyncio
 import copy
 import io
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -57,13 +58,13 @@ def generate(client, session, rewrite_of=None):
     return client.post(f"/api/image-surveys/{session['session_id']}/generate", json=body)
 
 
-def live_stub(app, monkeypatch, modifier=None):
+def live_stub(app, monkeypatch, modifier=None, profile_id="default"):
     engine = app.state.engine
     engine.settings.mock = False
     engine.settings.api_key = "fake-key-never-sent"
     calls = []
     async def complete(payload, model):
-        profile = app.state.surveys.profiles["default"]
+        profile = app.state.surveys.profiles[profile_id]
         content = payload["messages"][-1]["content"]
         input_text = content[0]["text"] if isinstance(content, list) else content
         data = json.loads(json.loads(input_text)["input"])
@@ -141,7 +142,7 @@ def test_partial_answers_replacement_and_validation(client):
 
 def test_profiles_configuration_and_snapshot(client, app):
     profile_ids = {p["id"] for p in client.get("/api/survey-profiles").json()}
-    assert profile_ids == {"default", "study"}
+    assert profile_ids == {"default", "study", "diary"}
     session = create(client, "study")
     assert len(session["survey"]["questions"]) == 3
     assert all(len(q["options"]) == 4 for q in session["survey"]["questions"])
@@ -368,6 +369,225 @@ def test_concurrent_generate_and_answers_are_rejected(app):
             release.set()
         result = await pending
         assert result["status"] == "COMPLETED" and len(calls) == 1
+    asyncio.run(scenario())
+
+
+def diary_files(colors=("white", "black", "blue")):
+    return [("images", (f"photo_{i}.png", photo(color), "image/png")) for i, color in enumerate(colors)]
+
+
+def test_diary_bundle_reaches_survey_and_text_with_selected_date(app, client, monkeypatch):
+    calls = live_stub(app, monkeypatch, profile_id="diary")
+    response = client.post("/api/image-surveys", files=diary_files(),
+                           data={"profile_id": "diary", "entry_date": "2025-04-03"})
+    assert response.status_code == 201, response.text
+    session = response.json()
+    assert session["image_count"] == 3 and session["entry_date"] == "2025-04-03"
+    assert len(session["survey"]["questions"]) == 4
+    assert all(len(q["options"]) == 4 for q in session["survey"]["questions"])
+    assert [p["image_id"] for p in session["images"]] == ["img_1", "img_2", "img_3"]
+    assert all(p["status"] == "COMPLETED" for p in session["images"])
+    session = submit(client, session, 1)
+    result = generate(client, session).json()
+    assert result["entry_date"] == "2025-04-03" and result["status"] == "COMPLETED"
+    assert result["length"]["target_chars"] == 800
+    assert [s["id"] for s in result["sections"]] == ["moments", "feelings", "memory"]
+    assert [c["stage"] for c in calls] == ["analysis", "analysis", "analysis", "survey", "text"]
+    for call in calls[-2:]:
+        assert call["data"]["entry_date"] == "2025-04-03"
+        assert [p["image_id"] for p in call["data"]["analysis"]["images"]] == ["img_1", "img_2", "img_3"]
+    assert "설렜어요" in result["text"]
+    uris = [c["payload"]["messages"][-1]["content"][1]["dataUri"]["data"] for c in calls[:3]]
+    assert len(set(uris)) == 3
+    saved = client.get(f"/api/image-surveys/{session['session_id']}").json()
+    assert saved["result"]["generation_id"] == result["generation_id"]
+    assert [c["image_id"] for c in saved["calls"][:3]] == ["img_1", "img_2", "img_3"]
+    persisted = app.state.surveys.repo.get(session["session_id"])
+    assert all("sha256" in p and "raw" not in p for p in persisted["images"])
+    assert "data:image" not in json.dumps(persisted)
+    assert generate(client, session).json()["reused"] and len(calls) == 5
+
+
+@pytest.mark.parametrize("case,status", [
+    ("missing", 422), ("too_many", 422), ("both_fields", 422),
+    ("bad_middle", 422), ("bad_date", 422), ("per_file", 413), ("total", 413),
+])
+def test_diary_invalid_bundle_does_not_call_ai(app, client, monkeypatch, case, status):
+    calls = live_stub(app, monkeypatch, profile_id="diary")
+    config = app.state.surveys.profiles["diary"]["image"]
+    data = {"profile_id": "diary", "entry_date": "2026-10-08"}
+    files = diary_files()
+    if case == "missing":
+        files = []
+    elif case == "too_many":
+        files = diary_files(("white",) * 6)
+    elif case == "both_fields":
+        files.append(("image", ("legacy.png", photo())))
+    elif case == "bad_middle":
+        files[1] = ("images", ("bad.png", b"not-an-image"))
+    elif case == "bad_date":
+        data["entry_date"] = "2026-02-30"
+    elif case == "per_file":
+        config["max_upload_mb"] = 1
+        files = [("images", ("large.png", b"a" * (1024 * 1024 + 1)))]
+    elif case == "total":
+        config.update(max_upload_mb=2, max_total_upload_mb=1)
+        # 이미지 포맷 검사 이전에 전체 바이트 한도를 검사합니다.
+        files = [("images", ("one.png", b"a" * 700000)), ("images", ("two.png", b"b" * 700000))]
+    response = client.post("/api/image-surveys", files=files, data=data)
+    assert response.status_code == status, response.text
+    assert calls == []
+    with app.state.engine.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM survey_sessions").fetchone()[0] == 0
+
+
+def test_diary_idempotency_includes_photo_order_and_date(client):
+    data = {"profile_id": "diary", "entry_date": "2026-10-07"}
+    headers = {"Idempotency-Key": "day-bundle"}
+    first = client.post("/api/image-surveys", files=diary_files(), data=data, headers=headers).json()
+    duplicate = client.post("/api/image-surveys", files=diary_files(), data=data, headers=headers).json()
+    assert first["session_id"] == duplicate["session_id"]
+    assert len(duplicate["calls"]) == 4
+    for changed_data, files in [
+        ({**data, "entry_date": "2026-10-08"}, diary_files()),
+        (data, list(reversed(diary_files()))),
+        (data, diary_files(("white", "black", "red"))),
+    ]:
+        assert client.post("/api/image-surveys", files=files, data=changed_data, headers=headers).status_code == 409
+
+
+@pytest.mark.parametrize("all_unusable", [False, True])
+def test_diary_unusable_photos_are_excluded(app, client, monkeypatch, all_unusable):
+    index = 0
+    def modifier(stage, output):
+        nonlocal index
+        if stage == "analysis":
+            index += 1
+            if all_unusable or index == 2:
+                output.update(usable=False, issue="자료를 확인할 수 없습니다.", observations=[])
+        return output, "stop"
+    calls = live_stub(app, monkeypatch, modifier, profile_id="diary")
+    session = client.post("/api/image-surveys", files=diary_files(), data={"profile_id": "diary"}).json()
+    assert len(session["images"]) == 3
+    if all_unusable:
+        assert session["status"] == "NEEDS_IMAGE" and session["survey"] is None
+        assert session["analysis"]["images"] == [] and len(calls) == 3
+    else:
+        assert session["status"] == "SURVEY_READY"
+        assert [p["image_id"] for p in calls[-1]["data"]["analysis"]["images"]] == ["img_1", "img_3"]
+        assert session["analysis"]["excluded_images"] == [{"image_id": "img_2", "issue": "자료를 확인할 수 없습니다."}]
+
+
+def test_diary_retry_after_restart_reuses_successful_photo_analysis(app, client, monkeypatch):
+    count = 0
+    def modifier(stage, output):
+        nonlocal count
+        if stage == "analysis":
+            count += 1
+            if count == 2:
+                raise HTTPException(502, "두 번째 사진 분석 실패")
+        return output, "stop"
+    calls = live_stub(app, monkeypatch, modifier, profile_id="diary")
+    response = client.post("/api/image-surveys", files=diary_files(),
+                           data={"profile_id": "diary", "entry_date": "2026-09-01"})
+    assert response.status_code == 502 and response.json()["detail"]["image_id"] == "img_2"
+    sid = response.json()["detail"]["session_id"]
+    interrupted = client.get(f"/api/image-surveys/{sid}").json()
+    assert [p["status"] for p in interrupted["images"]] == ["COMPLETED", "FAILED", "PENDING"]
+    restarted = create_app(app.state.engine.settings)
+    restarted.state.engine.provider.complete = app.state.engine.provider.complete
+    with TestClient(restarted) as second:
+        assert second.post(f"/api/image-surveys/{sid}/retry").status_code == 422
+        assert second.post(f"/api/image-surveys/{sid}/retry", files=list(reversed(diary_files()))).status_code == 409
+        assert second.post(f"/api/image-surveys/{sid}/retry", files=diary_files(("white", "black"))).status_code == 409
+        resumed = second.post(f"/api/image-surveys/{sid}/retry", files=diary_files())
+        assert resumed.status_code == 200, resumed.text
+        session = resumed.json()
+        assert session["status"] == "SURVEY_READY" and session["entry_date"] == "2026-09-01"
+        assert len(session["calls"]) == 4
+        assert [c["stage"] for c in calls] == ["analysis", "analysis", "analysis", "analysis", "survey"]
+        # 처음 성공한 img_1은 재호출되지 않고 img_2부터 계속합니다.
+        assert calls[1]["payload"] == calls[2]["payload"]
+        assert calls[0]["payload"] != calls[2]["payload"]
+        assert second.post(f"/api/image-surveys/{sid}/retry", files=diary_files()).status_code == 409
+
+
+def test_restart_marks_only_inflight_photo_failed(app, client):
+    session = client.post("/api/image-surveys", files=diary_files(), data={"profile_id": "diary"}).json()
+    sid = session["session_id"]
+    def interrupt(saved):
+        saved["status"] = "ANALYZING"
+        saved["analysis"] = saved["survey"] = None
+        saved["images"][1].update(status="ANALYZING", analysis=None)
+        saved["images"][2].update(status="PENDING", analysis=None)
+    app.state.surveys.repo.edit(sid, interrupt)
+    restarted = create_app(app.state.engine.settings)
+    recovered = restarted.state.surveys.get(sid)
+    assert recovered["status"] == "ANALYSIS_FAILED"
+    assert [p["status"] for p in recovered["images"]] == ["COMPLETED", "FAILED", "PENDING"]
+    assert recovered["images"][0]["analysis"] == session["images"][0]["analysis"]
+
+
+def test_legacy_single_photo_session_can_be_retried(app, client):
+    session = create(client)
+    sid = session["session_id"]
+    def legacy(saved):
+        saved.pop("images")
+        saved.pop("entry_date")
+        saved["profile"]["image"].pop("max_images")
+        saved["profile"]["image"].pop("max_total_upload_mb")
+        saved.update(status="ANALYSIS_FAILED", analysis=None, survey=None)
+    app.state.surveys.repo.edit(sid, legacy)
+    saved = client.get(f"/api/image-surveys/{sid}").json()
+    assert saved["entry_date"] is None and saved["image_count"] == 1
+    retried = client.post(f"/api/image-surveys/{sid}/retry", files={"image": ("original.png", photo())})
+    assert retried.status_code == 200 and retried.json()["status"] == "SURVEY_READY"
+
+
+def test_default_entry_date_uses_korean_date(client, monkeypatch):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 8, 16, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr("app.survey.datetime", FixedDatetime)
+    session = create(client)
+    assert session["entry_date"] == "2026-10-09"
+
+
+def test_cancelled_bundle_analysis_can_resume_without_repeating_success(app):
+    async def scenario():
+        service = app.state.surveys
+        engine = app.state.engine
+        engine.settings.mock = False
+        engine.settings.api_key = "fake-key-never-sent"
+        started = asyncio.Event()
+        calls = []
+        async def complete(payload, model):
+            calls.append(payload)
+            if len(calls) == 2:
+                started.set()
+                await asyncio.Event().wait()
+            content = payload["messages"][-1]["content"]
+            output = mock_analysis() if isinstance(content, list) else mock_survey(service.profiles["diary"])
+            return {"message": {"content": json.dumps(output)}, "finishReason": "stop",
+                    "usage": {"promptTokens": 10, "completionTokens": 5}}
+        engine.provider.complete = complete
+        raws = [photo("white"), photo("black"), photo("blue")]
+        task = asyncio.create_task(service.create(raws, "diary", "cancelled-bundle", "2026-10-08"))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        with engine.store.connect() as db:
+            sid = db.execute("SELECT id FROM survey_sessions WHERE request_key=?", ("cancelled-bundle",)).fetchone()[0]
+        interrupted = service.get(sid)
+        assert interrupted["status"] == "ANALYSIS_FAILED"
+        assert [p["status"] for p in interrupted["images"]] == ["COMPLETED", "FAILED", "PENDING"]
+        resumed = await service.retry(sid, raws)
+        assert resumed["status"] == "SURVEY_READY" and len(calls) == 5
+        assert resumed["images"][0]["analysis"] == interrupted["images"][0]["analysis"]
+        assert calls[1] == calls[2] and calls[0] != calls[2]
+        assert engine.store.usage()["unknown_usage_calls"] == 1
     asyncio.run(scenario())
 
 

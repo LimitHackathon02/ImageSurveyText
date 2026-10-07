@@ -40,12 +40,34 @@ export async function askDocument(question, documentIds = []) {
 }
 
 // 같은 업로드를 재전송할 때 requestKey도 재사용하면 세션 중복 생성을 막습니다.
-export async function createImageSurvey(file, profileId = "default", requestKey = crypto.randomUUID()) {
+export async function createImageSurvey(files, profileId = "default", requestKey = crypto.randomUUID(), entryDate = null) {
   const form = new FormData();
-  form.append("image", file);
+  // File 한 장, File 배열, input.files의 FileList를 모두 받습니다.
+  const photos = files instanceof File ? [files] : Array.from(files);
+  for (const photo of photos) form.append("images", photo);
   form.append("profile_id", profileId);
+  if (entryDate) form.append("entry_date", entryDate);
   return readResponse(await fetch(`${BASE}/api/image-surveys`, {
     method: "POST", headers: {"X-Team-Key": TEAM_KEY, "Idempotency-Key": requestKey}, body: form,
+  }));
+}
+
+// entryDate는 날짜 선택 input의 YYYY-MM-DD 값입니다.
+export async function createDiarySurvey(files, entryDate, requestKey = crypto.randomUUID()) {
+  if (!entryDate) throw new Error("일기 날짜를 선택하세요.");
+  return createImageSurvey(files, "diary", requestKey, entryDate);
+}
+
+// ANALYSIS_FAILED: 처음 올린 사진 전체를 같은 순서로 전달합니다.
+// SURVEY_FAILED: files 없이 호출합니다. 성공한 분석은 다시 호출하지 않습니다.
+export async function retryImageSurvey(sessionId, files = null) {
+  const form = new FormData();
+  if (files) {
+    const photos = files instanceof File ? [files] : Array.from(files);
+    for (const photo of photos) form.append("images", photo);
+  }
+  return readResponse(await fetch(`${BASE}/api/image-surveys/${sessionId}/retry`, {
+    method: "POST", headers: {"X-Team-Key": TEAM_KEY}, body: form,
   }));
 }
 

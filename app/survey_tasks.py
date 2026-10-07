@@ -83,21 +83,31 @@ def mock_analysis():
 
 def mock_survey(profile):
     config = profile["survey"]
-    labels = {"goal": "목표", "current_situation": "현재 상황", "preference": "선호", "constraints": "제약", "priority": "우선순위"}
+    labels = {"goal": "목표", "current_situation": "현재 상황", "preference": "선호", "constraints": "제약", "priority": "우선순위",
+              "main_memory": "가장 기억에 남은 순간", "companionship": "주로 함께한 사람", "emotion": "하루의 감정", "personal_meaning": "남기고 싶은 의미"}
+    diary_options = {"main_memory": ["작은 일상의 순간", "새로운 경험", "함께한 시간"],
+                     "companionship": ["혼자", "친구·동료", "가족·연인"],
+                     "emotion": ["편안했어요", "설렜어요", "피곤했어요"],
+                     "personal_meaning": ["작은 즐거움", "새롭게 느낀 점", "함께한 시간의 의미"]}
     questions = []
     for index in range(config["question_count"]):
         slot = config["slots"][index % len(config["slots"])]
         count = config["min_options"]
         options = [{"label": f"예시 선택 {n + 1}", "is_unknown": False} for n in range(count)]
+        if slot in diary_options:
+            for option, label in zip(options, diary_options[slot]):
+                option["label"] = label[:config["option_max_chars"]]
         if config["include_unknown_option"]:
-            options[-1] = {"label": "아직 정하지 않았어요", "is_unknown": True}
+            options[-1] = {"label": "기억 안 남·쓰지 않음" if slot in diary_options else "아직 정하지 않았어요", "is_unknown": True}
         question = f"[MOCK {index + 1}] {labels.get(slot, slot)} 선택?"[:config["question_max_chars"]]
         questions.append({"slot": slot, "question": question, "options": options})
     return {"questions": questions}
 
 
-def mock_text(profile, resolved_answers):
+def mock_text(profile, resolved_answers, entry_date=None):
     title = f"[MOCK] {profile['domain']} 응답 기반 글"[:200]
+    if entry_date:
+        title = f"{entry_date} {title}"[:200]
     headings = profile["output"]["sections"]
     answers = "; ".join(f"{a['slot']}: {a['selected_option']['label']}" for a in resolved_answers)
     unit = f"[MOCK] 실제 AI 생성이 아닌 연결 연습용 문장입니다. 선택한 답변은 {answers}입니다.\n"

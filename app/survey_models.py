@@ -15,7 +15,9 @@ class CallConfig(StrictModel):
 
 class ImageConfig(CallConfig):
     focus: str = Field(min_length=1, max_length=2000)
+    max_images: int = Field(default=5, ge=1, le=10)
     max_upload_mb: int = Field(default=10, ge=1, le=20)
+    max_total_upload_mb: int = Field(default=25, ge=1, le=100)
     resize_long_edge: int = Field(default=1280, ge=32, le=2240)
 
 

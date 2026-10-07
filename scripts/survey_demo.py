@@ -23,28 +23,31 @@ def read_response(response):
 
 def main():
     parser = argparse.ArgumentParser(description="이미지 설문 API 전체 흐름 실습")
-    parser.add_argument("--image", help="분석할 이미지 경로. 모의 실행에서는 생략 가능")
-    parser.add_argument("--profile", default="default", help="profiles JSON에 정의한 ID")
+    parser.add_argument("--image", action="append", help="사진 경로. 여러 장이면 --image를 반복. 모의 실행에서는 생략 가능")
+    parser.add_argument("--profile", default="diary", help="profiles JSON에 정의한 ID, 기본 diary")
+    parser.add_argument("--date", help="일기 날짜 YYYY-MM-DD. 생략하면 서버의 한국 날짜 사용")
     parser.add_argument("--url", default="http://localhost:8000")
     parser.add_argument("--interactive", action="store_true", help="질문마다 번호로 답변 선택")
     args = parser.parse_args()
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-    with httpx.Client(base_url=args.url.rstrip("/"), timeout=150,
+    with httpx.Client(base_url=args.url.rstrip("/"), timeout=600,
                       headers={"X-Team-Key": os.getenv("TEAM_API_KEY", "")}) as client:
         health = read_response(client.get("/health"))
         if args.image:
-            raw = Path(args.image).read_bytes()
-            filename = Path(args.image).name
+            files = [("images", (Path(path).name, Path(path).read_bytes())) for path in args.image]
         else:
             if not health["mock"]:
                 raise RuntimeError("실제 AI 모드에서는 --image로 분석할 사진을 지정하세요.")
             buffer = io.BytesIO()
             Image.new("RGB", (100, 100), "white").save(buffer, "PNG")
-            raw, filename = buffer.getvalue(), "mock.png"
-        print("1. 이미지 분석과 설문 생성", flush=True)
-        session = read_response(client.post("/api/image-surveys", files={"image": (filename, raw)},
-                                            data={"profile_id": args.profile}))
+            files = [("images", ("mock.png", buffer.getvalue()))]
+        data = {"profile_id": args.profile}
+        if args.date:
+            data["entry_date"] = args.date
+        print(f"1. 사진 {len(files)}장 분석과 전체 설문 생성", flush=True)
+        session = read_response(client.post("/api/image-surveys", files=files, data=data))
         print(f"session_id: {session['session_id']} / 상태: {session['status']}")
+        print(f"기록 날짜: {session['entry_date']} / 사진: {session['image_count']}장")
         print(json.dumps(session["analysis"], ensure_ascii=False, indent=2))
         if session["status"] != "SURVEY_READY":
             raise RuntimeError("설문이 준비되지 않았습니다. 분석 사유와 세션 상태를 확인하세요.")
