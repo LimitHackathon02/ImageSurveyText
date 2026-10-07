@@ -1,4 +1,4 @@
-# ImageSurveyText — 이미지·설문·맞춤 글 백엔드
+# ImageSurveyText_Diary — 이미지·설문·맞춤 글 백엔드
 
 이미지 분석 → 객관식 설문 → 사용자 답변 → 맞춤 글 생성을 연결한 Python + FastAPI 백엔드입니다. 주제 변경은 `profiles/*.json`, 단계별 지시문 변경은 `survey_prompts.json`에서 합니다. 실행 시 다른 AI 서비스를 호출하지 않으며 HyperCLOVA X REST API만 사용합니다. 기본값은 외부 호출 없는 **모의 실행**입니다. 기존 일반 텍스트·이미지·문서 API도 함께 제공합니다.
 
@@ -15,8 +15,8 @@ sh scripts/start.sh
 팀원이 새로 받는 경우에는 아래 순서로 실행합니다.
 
 ```sh
-git clone https://github.com/LimitHackathon02/ImageSurveyText.git
-cd ImageSurveyText
+git clone https://github.com/LimitHackathon02/ImageSurveyText_Diary.git
+cd ImageSurveyText_Diary
 sh scripts/start.sh
 ```
 
