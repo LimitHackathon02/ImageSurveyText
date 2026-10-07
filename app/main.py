@@ -1,17 +1,16 @@
-import base64
 import hmac
-import io
-import warnings
 from typing import Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field, field_validator
 
 from .engine import Engine
+from .images import image_data_uri
 from .settings import Settings
+from .survey import SurveyService
+from .survey_models import AnswersRequest, GenerateRequest
 
 
 class Turn(BaseModel):
@@ -46,42 +45,53 @@ class AskRequest(BaseModel):
     use_cache: bool = True
 
 
-def image_data_uri(raw):
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(raw)) as original:
-                if original.format not in {"PNG", "JPEG", "WEBP", "BMP"}:
-                    raise ValueError("지원 형식 아님")
-                if original.width < 4 or original.height < 4:
-                    raise ValueError("이미지는 가로·세로 4px 이상이어야 합니다.")
-                image = ImageOps.exif_transpose(original).convert("RGB")
-                image.thumbnail((1280, 1280))
-                w, h = image.size
-                # API의 5:1 비율 제한에 맞춰 흰 여백을 추가합니다.
-                size = (max(w, (h+4)//5, 4), max(h, (w+4)//5, 4))
-                image = ImageOps.pad(image, size, color="white") if size != image.size else image
-                out = io.BytesIO()
-                image.save(out, format="JPEG", quality=85)
-                return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
-        raise HTTPException(422, "유효한 PNG/JPEG/WEBP/BMP 이미지를 사용하세요(최소 4px).") from None
-
-
 def create_app(settings=None):
     settings = settings or Settings.from_env()
     engine = Engine(settings)
+    surveys = SurveyService(engine)
     app = FastAPI(title="HyperCLOVA X 해커톤 백엔드", version="1.0.0",
                   description="주제별 tasks.json 설정으로 재사용하는 텍스트·이미지·문서 질문 API. MOCK 응답은 고정 예시입니다.")
     app.state.engine = engine
+    app.state.surveys = surveys
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins),
-                       allow_methods=["GET", "POST", "DELETE"], allow_headers=["Content-Type", "X-Team-Key"])
+                       allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Content-Type", "X-Team-Key", "Idempotency-Key"])
 
     async def authorize(x_team_key: str = Header(default="")):
         if settings.team_key and not hmac.compare_digest(x_team_key.encode(), settings.team_key.encode()):
             raise HTTPException(401, "X-Team-Key를 확인하세요.")
 
     api = {"dependencies": [Depends(authorize)]}
+
+    @app.get("/api/survey-profiles", tags=["이미지 설문"], **api)
+    async def survey_profiles():
+        return list(surveys.profiles.values())
+
+    @app.post("/api/image-surveys", status_code=201, tags=["이미지 설문"], **api)
+    async def survey_create(image: UploadFile = File(...), profile_id: str = Form("default", max_length=40),
+                            idempotency_key: str | None = Header(default=None, min_length=1, max_length=150)):
+        profile = surveys.get_profile(profile_id)
+        raw = await image.read(profile["image"]["max_upload_mb"] * 1024 * 1024 + 1)
+        return await surveys.create(raw, profile_id, idempotency_key)
+
+    @app.get("/api/image-surveys/{session_id}", tags=["이미지 설문"], **api)
+    async def survey_get(session_id: str):
+        return surveys.get(session_id)
+
+    @app.put("/api/image-surveys/{session_id}/answers", tags=["이미지 설문"], **api)
+    async def survey_answers(session_id: str, body: AnswersRequest):
+        return surveys.save_answers(session_id, body)
+
+    @app.post("/api/image-surveys/{session_id}/generate", tags=["이미지 설문"], **api)
+    async def survey_generate(session_id: str, body: GenerateRequest):
+        return await surveys.generate(session_id, body)
+
+    @app.post("/api/image-surveys/{session_id}/retry", tags=["이미지 설문"], **api)
+    async def survey_retry(session_id: str, image: UploadFile | None = File(default=None)):
+        raw = None
+        if image is not None:
+            session = surveys.repo.get(session_id)
+            raw = await image.read(session["profile"]["image"]["max_upload_mb"] * 1024 * 1024 + 1)
+        return await surveys.retry(session_id, raw)
 
     @app.get("/", include_in_schema=False)
     async def index():

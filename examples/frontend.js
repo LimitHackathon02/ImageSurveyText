@@ -38,3 +38,35 @@ export async function askDocument(question, documentIds = []) {
     body: JSON.stringify({question, document_ids: documentIds}),
   }));
 }
+
+// 같은 업로드를 재전송할 때 requestKey도 재사용하면 세션 중복 생성을 막습니다.
+export async function createImageSurvey(file, profileId = "default", requestKey = crypto.randomUUID()) {
+  const form = new FormData();
+  form.append("image", file);
+  form.append("profile_id", profileId);
+  return readResponse(await fetch(`${BASE}/api/image-surveys`, {
+    method: "POST", headers: {"X-Team-Key": TEAM_KEY, "Idempotency-Key": requestKey}, body: form,
+  }));
+}
+
+export async function getImageSurvey(sessionId) {
+  return readResponse(await fetch(`${BASE}/api/image-surveys/${sessionId}`, {
+    headers: {"X-Team-Key": TEAM_KEY},
+  }));
+}
+
+// answers: [{question_id: "q_1", option_id: "q_1_o_2"}, ...]
+// 부분 저장도 가능하지만 생략한 기존 답변은 제거됩니다.
+export async function saveSurveyAnswers(sessionId, surveyRevision, answers) {
+  return readResponse(await fetch(`${BASE}/api/image-surveys/${sessionId}/answers`, {
+    method: "PUT", headers: {"Content-Type": "application/json", "X-Team-Key": TEAM_KEY},
+    body: JSON.stringify({survey_revision: surveyRevision, answers}),
+  }));
+}
+
+export async function generateSurveyText(sessionId, answersRevision, rewriteOf = null) {
+  return readResponse(await fetch(`${BASE}/api/image-surveys/${sessionId}/generate`, {
+    method: "POST", headers: {"Content-Type": "application/json", "X-Team-Key": TEAM_KEY},
+    body: JSON.stringify({answers_revision: answersRevision, rewrite_of: rewriteOf}),
+  }));
+}

@@ -1,6 +1,6 @@
-# HyperCLOVA X 해커톤 백엔드
+# ImageSurveyText — 이미지·설문·맞춤 글 백엔드
 
-주제가 달라져도 `tasks.json`의 프롬프트와 결과 필드를 바꿔 사용할 수 있는 Python + FastAPI 백엔드입니다. 실행 시 다른 AI 서비스를 호출하지 않으며 HyperCLOVA X REST API만 사용합니다. 기본값은 외부 호출 없는 **모의 실행**입니다.
+이미지 분석 → 객관식 설문 → 사용자 답변 → 맞춤 글 생성을 연결한 Python + FastAPI 백엔드입니다. 주제 변경은 `profiles/*.json`, 단계별 지시문 변경은 `survey_prompts.json`에서 합니다. 실행 시 다른 AI 서비스를 호출하지 않으며 HyperCLOVA X REST API만 사용합니다. 기본값은 외부 호출 없는 **모의 실행**입니다. 기존 일반 텍스트·이미지·문서 API도 함께 제공합니다.
 
 사용자 설명상 대회는 사전 준비가 기본적으로 금지되어 있습니다. **이 프로젝트는 사전 학습·연결 연습용입니다. 코드·설정·가이드의 반입 및 제출물 재사용이 허용된다고 가정하지 않습니다.** 현장에서 직접 작성할 최소 흐름은 `FIELD_GUIDE.md`에 정리했습니다.
 
@@ -22,7 +22,14 @@ sh scripts/start.sh
 
 `scripts/start.sh`가 `.venv`를 만들고, `requirements.txt`를 설치하고, `.env.example`을 `.env`로 복사합니다. 즉 README를 보고 위 명령을 실행하면 기본 모의 실행 환경은 자동으로 준비됩니다. API 키, 지급된 모델명, 팀별 CORS 주소는 각자 생성된 `.env`에 입력해야 하며 `.env` 파일은 저장소에 올리지 않습니다.
 
-Windows에서는 Git Bash 또는 WSL에서 위 명령을 실행하세요. macOS/Linux 터미널에서는 그대로 실행하면 됩니다. Python이 없거나 Python 3.11 미만이면 먼저 Python을 설치해야 합니다.
+macOS/Linux와 Windows WSL에서는 위 명령을 실행합니다. Windows 기본 Python은 아래 PowerShell 명령으로 실행합니다. Python이 없거나 Python 3.11 미만이면 먼저 Python을 설치해야 합니다.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.lock.txt
+Copy-Item .env.example .env  # 처음 한 번만: 기존 .env가 있으면 생략
+.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
 
 브라우저에서 **http://localhost:8000/docs**를 열면 프론트엔드 없이 API를 실행할 수 있습니다. `/api/run` → `Try it out`에서 아래 요청을 넣으세요.
 
@@ -31,6 +38,77 @@ Windows에서는 Git Bash 또는 WSL에서 위 명령을 실행하세요. macOS/
 ```
 
 `mock: true`는 연결 확인용 고정 예시입니다. 입력 요약·이미지 분석·답변 품질을 검증한 결과가 아닙니다. 모의 실행에서 `usage`는 0입니다.
+
+## 이미지 → 설문 → 글 전체 실행
+
+서버를 실행한 뒤 새 터미널에서 다음 명령으로 전체 흐름을 연습할 수 있습니다.
+
+```sh
+.venv/bin/python scripts/survey_demo.py
+.venv/bin/python scripts/survey_demo.py --profile study --interactive
+```
+
+모의 실행에서 이미지를 생략하면 연습용 빈 이미지를 사용합니다. 모의 설문과 글은 설정과 선택한 답변을 반영해 조립하지만 실제 사진을 이해하거나 AI가 글을 작성한 결과는 아닙니다. 실제 모드에서는 이미지 경로를 지정합니다.
+
+```sh
+.venv/bin/python scripts/survey_demo.py --image ./photo.jpg --profile default --interactive
+```
+
+Swagger의 **이미지 설문** 묶음에서 직접 호출해도 됩니다. Windows 기본 Python에서는 `.venv/bin/python` 대신 `.venv\Scripts\python`을 사용하세요.
+
+| 순서 | API | 입력·결과 |
+|---|---|---|
+| 설정 조회 | `GET /api/survey-profiles` | 선택할 주제 ID와 설정 목록 |
+| 1 | `POST /api/image-surveys` | multipart `image`, `profile_id` → 분석 JSON, `survey.questions`, `session_id` |
+| 2 | `PUT /api/image-surveys/{session_id}/answers` | 설문 버전과 선택 ID → 답변 저장, `answers_revision` |
+| 3 | `POST /api/image-surveys/{session_id}/generate` | 답변 버전 → `text`, 분량 상태, `generation_id` |
+| 조회 | `GET /api/image-surveys/{session_id}` | 분석·설문·답변·현재 결과·생성 이력 |
+| 복구 | `POST /api/image-surveys/{session_id}/retry` | 이미지 분석 또는 설문 생성 실패 단계 재시도 |
+
+1단계에서 질문 전체를 미리 생성합니다. 화면에서는 하나씩 보여 주면 됩니다. 정상 흐름의 실제 AI 호출은 이미지 분석 1회, 설문 생성 1회, 글 생성 1회입니다. 답변 저장에는 AI를 호출하지 않습니다. 상태가 `NEEDS_IMAGE`면 분석 사유를 보여 주고 다른 사진으로 새 세션을 만드세요.
+
+답변 저장 요청 예시는 다음과 같습니다. 전체 답변 교체 방식이므로 부분 저장 시 기존 답변도 함께 보내세요. 필수 질문을 모두 답해야 글을 생성할 수 있습니다.
+
+```json
+{
+  "survey_revision": 1,
+  "answers": [
+    {"question_id": "q_1", "option_id": "q_1_o_2"},
+    {"question_id": "q_2", "option_id": "q_2_o_1"}
+  ]
+}
+```
+
+글 생성 요청은 `{"answers_revision": 1}`입니다. 실제 요청에는 답변 저장 응답의 버전을 사용하세요. 같은 답변 버전에 대해 다시 요청하면 생성 결과를 재사용하고 `reused: true`를 반환합니다. 이 경우 `usage`는 원본 생성 당시 사용량이며 새 호출이 발생하지 않습니다. 답변을 변경하면 버전이 올라가고 이전 결과는 현재 결과에서 제외됩니다.
+
+`output.target_chars`는 공백·줄바꿈·제목을 포함한 `len(text)` 기준입니다. 기본값은 1,500자 ±20%입니다. 길이는 모델 요청만으로 보장되지 않으므로 서버가 측정해 `COMPLETED` 또는 `NEEDS_REVIEW`를 반환합니다. 글이 토큰 제한으로 잘리면 `GENERATION_FAILED`이며 완료 결과로 반환하지 않습니다.
+
+완료된 원본 글을 한 번 재작성하려면 `{"answers_revision": 1, "rewrite_of": "원본 generation_id"}`를 보냅니다. 같은 재작성 요청은 재사용하며 재작성 결과를 다시 재작성하는 것은 거절합니다. 실패한 생성은 같은 요청으로 명시적으로 재시도할 수 있고 자동 재호출은 없습니다.
+
+생성 요청 중에는 중복 생성·답변 수정을 409로 거절합니다. 세션 생성에 `Idempotency-Key` 헤더를 지정하고 재전송 시 같은 키를 유지하면 중복 세션을 방지합니다. 실패 응답의 `detail`에는 `session_id`와 실패 상태가 들어갑니다. `ANALYSIS_FAILED` 재시도에는 원래 `image`를 다시 업로드하고, `SURVEY_FAILED`는 파일 없이 `/retry`를 호출합니다. 정상 분석 정보는 재사용합니다.
+
+SQLite에는 세션·설문·답변·설정과 프롬프트 스냅샷·글·사용량이 저장됩니다. 원본 이미지는 저장하지 않습니다. 서버 재시작 후 진행 중이던 작업은 실패 상태로 복구됩니다. **단일 서버 프로세스**로 실행해야 하며 `--workers`나 중복 서버를 사용하면 시작 시 복구가 다른 서버의 작업에 영향을 줄 수 있습니다. MOCK_MODE를 전환하면 기존 세션을 이어 쓰지 말고 새 세션을 만드세요.
+
+## 주제와 로직을 수정하는 위치
+
+`profiles/default.json`은 생활 공간 예시(질문 5개, 글 1,500자), `profiles/study.json`은 학습 예시(질문 3개, 선택지 4개, 글 1,200자)입니다. 새 JSON을 복사한 뒤 고유 `id`를 정하고 서버를 재시작하면 `/api/survey-profiles`에 표시됩니다. 새 세션의 `profile_id`로 선택하세요. 기존 세션은 저장한 설정 스냅샷을 사용합니다.
+
+| 바꾸고 싶은 항목 | 수정 위치 |
+|---|---|
+| 주제·대상·글 목적 | profile의 `domain`, `audience`, `objective` |
+| 이미지에서 볼 내용·업로드 한도·해상도 | profile의 `image` |
+| 질문 수·선택지 수·확인할 항목 | profile의 `survey` |
+| 글 분량·말투·섹션·출력 토큰 한도 | profile의 `output` |
+| 이미지 분석·설문·글 생성 지시문 | `survey_prompts.json` |
+| 응답 JSON과 설정 값의 허용 범위 | `app/survey_models.py` |
+| 질문 품질 검사·모의 결과·글 조립 | `app/survey_tasks.py` |
+| 답변 저장·상태 전이·재작성·호출 순서 | `app/survey.py` |
+| SQLite 저장·원자적 상태 변경·재시작 복구 | `app/survey_store.py` |
+| 이미지 전처리·HTTP API | `app/images.py`, `app/main.py` |
+
+예를 들어 질문을 3개로 줄이려면 `question_count=3`으로 바꾸고 `slots`도 3개 이하로 줄입니다. 선택지 4개를 고정하려면 `min_options`와 `max_options`를 모두 4로 설정합니다. `sections`의 ID와 제목을 바꾸면 생성 지시·검사·최종 글에 반영됩니다. 설정의 `version`도 올려 변경을 추적하세요.
+
+현재 지원 범위는 단일 선택형, 전체 설문 사전 생성, markdown, 글 한 번 생성(`single`)입니다. 복수 선택·자유 입력·답변에 따른 분기·섹션별 장문 생성은 요청 형식과 검증·흐름을 추가해야 합니다. 지원하지 않는 설정 값은 시작 시 오류로 알립니다. 서버에서 합친 설문 생성 입력은 최대 24,000자이며 이는 토큰 제한을 정확하게 계산한 값은 아닙니다.
 
 ## 실제 HyperCLOVA X 연결
 

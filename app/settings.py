@@ -14,6 +14,8 @@ class Settings:
     timeout: float = 60
     database: str = "data/hackathon.sqlite3"
     tasks_path: str = "tasks.json"
+    profiles_path: str = "profiles"
+    survey_prompts_path: str = "survey_prompts.json"
     cache_ttl: int = 3600
     max_calls: int = 300
     token_threshold: int = 200000
@@ -32,6 +34,8 @@ class Settings:
             timeout=float(os.getenv("CLOVA_TIMEOUT_SECONDS", "60")),
             database=os.getenv("DATABASE_PATH", cls.database),
             tasks_path=os.getenv("TASKS_PATH", cls.tasks_path),
+            profiles_path=os.getenv("PROFILES_PATH", cls.profiles_path),
+            survey_prompts_path=os.getenv("SURVEY_PROMPTS_PATH", cls.survey_prompts_path),
             cache_ttl=int(os.getenv("CACHE_TTL_SECONDS", "3600")),
             max_calls=int(os.getenv("MAX_LIVE_CALLS", "300")),
             token_threshold=int(os.getenv("TOKEN_STOP_THRESHOLD", "200000")),

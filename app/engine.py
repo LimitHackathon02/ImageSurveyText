@@ -45,7 +45,7 @@ class Engine:
             if not 0 <= task.get("temperature", 0) <= 1:
                 raise ValueError("temperature는 0~1로 설정하세요.")
 
-    async def run(self, task_id, text, context="", history=None, image=None, cache=True, override=None):
+    async def run(self, task_id, text, context="", history=None, image=None, cache=True, override=None, validate_output=None):
         task = override or self.tasks.get(task_id)
         if task is None:
             raise HTTPException(404, "없는 작업입니다. GET /api/tasks를 확인하세요.")
@@ -66,6 +66,8 @@ class Engine:
             if cacheable:
                 saved = self.store.cache_get(cache_key, self.settings.cache_ttl)
                 if saved is not None:
+                    if validate_output:
+                        validate_output(saved["output"])
                     saved.update(cached=True, usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
                     return saved
             if self.settings.mock:
@@ -96,6 +98,9 @@ class Engine:
                 if schema and finish_reason == "length":
                     raise HTTPException(502, "AI JSON 출력이 토큰 제한으로 잘렸습니다. max_tokens를 조정하세요.")
             output = parse_output(text_result, schema)
+            # 설문 개수·근거 ID 등 의미 검사를 통과한 결과만 캐시합니다.
+            if validate_output:
+                validate_output(output)
             p, c = usage.get("promptTokens"), usage.get("completionTokens")
             known = type(p) is int and type(c) is int and p >= 0 and c >= 0
             response = {"task": task_id, "output": output, "model": model, "mock": self.settings.mock,

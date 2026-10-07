@@ -1,0 +1,39 @@
+{
+  "id": "study",
+  "version": 1,
+  "domain": "학습",
+  "audience": "노트나 교재를 바탕으로 공부하려는 학생",
+  "objective": "사진에서 읽을 수 있는 내용과 학습 조건에 맞춘 학습 가이드 작성",
+  "image": {
+    "focus": "실제로 읽을 수 있는 학습 내용과 읽기 어려운 부분을 구분한다.",
+    "max_upload_mb": 10,
+    "resize_long_edge": 1600,
+    "max_tokens": 1536,
+    "temperature": 0
+  },
+  "survey": {
+    "question_count": 3,
+    "min_options": 4,
+    "max_options": 4,
+    "question_max_chars": 100,
+    "option_max_chars": 50,
+    "slots": ["goal", "current_situation", "constraints"],
+    "include_unknown_option": true,
+    "max_tokens": 1536,
+    "temperature": 0
+  },
+  "output": {
+    "format": "markdown",
+    "tone": "학생이 이해하기 쉬운 친절한 한국어",
+    "target_chars": 1200,
+    "length_tolerance_ratio": 0.2,
+    "sections": [
+      {"id": "concepts", "title": "확인한 학습 내용"},
+      {"id": "study_plan", "title": "답변에 맞춘 공부 방법"},
+      {"id": "practice", "title": "연습과 확인"}
+    ],
+    "generation_mode": "single",
+    "max_tokens": 3072,
+    "temperature": 0.3
+  }
+}

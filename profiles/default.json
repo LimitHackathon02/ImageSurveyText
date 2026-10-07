@@ -1,0 +1,39 @@
+{
+  "id": "default",
+  "version": 1,
+  "domain": "생활 공간",
+  "audience": "공간을 개선하려는 사용자",
+  "objective": "사진과 사용자 답변을 반영한 실천 계획 작성",
+  "image": {
+    "focus": "공간의 구성과 보이는 물건을 관찰한다.",
+    "max_upload_mb": 10,
+    "resize_long_edge": 1280,
+    "max_tokens": 1024,
+    "temperature": 0
+  },
+  "survey": {
+    "question_count": 5,
+    "min_options": 3,
+    "max_options": 5,
+    "question_max_chars": 100,
+    "option_max_chars": 50,
+    "slots": ["goal", "current_situation", "preference", "constraints", "priority"],
+    "include_unknown_option": true,
+    "max_tokens": 2048,
+    "temperature": 0
+  },
+  "output": {
+    "format": "markdown",
+    "tone": "쉽고 구체적인 한국어",
+    "target_chars": 1500,
+    "length_tolerance_ratio": 0.2,
+    "sections": [
+      {"id": "context", "title": "현재 상황"},
+      {"id": "recommendations", "title": "답변에 맞춘 제안"},
+      {"id": "actions", "title": "바로 할 일"}
+    ],
+    "generation_mode": "single",
+    "max_tokens": 3072,
+    "temperature": 0.3
+  }
+}
