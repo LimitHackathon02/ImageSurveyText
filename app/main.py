@@ -50,8 +50,8 @@ def create_app(settings=None):
     settings = settings or Settings.from_env()
     engine = Engine(settings)
     surveys = SurveyService(engine)
-    app = FastAPI(title="HyperCLOVA X 사진 일기·설문 백엔드", version="1.1.0",
-                  description="여러 사진과 설문 답변으로 하루 일기 한 편을 생성합니다. profiles로 주제를 바꿀 수 있으며 일반 텍스트·이미지·문서 API도 제공합니다. MOCK은 연결 확인용입니다.")
+    app = FastAPI(title="HyperCLOVA X 이미지·설문·텍스트 템플릿", version="1.2.0",
+                  description="profiles와 프롬프트로 주제를 바꾸는 이미지→설문→텍스트 흐름과 일반 텍스트·이미지·문서 API를 제공합니다. MOCK은 연결 확인용입니다.")
     app.state.engine = engine
     app.state.surveys = surveys
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins),

@@ -24,8 +24,8 @@ def read_response(response):
 def main():
     parser = argparse.ArgumentParser(description="이미지 설문 API 전체 흐름 실습")
     parser.add_argument("--image", action="append", help="사진 경로. 여러 장이면 --image를 반복. 모의 실행에서는 생략 가능")
-    parser.add_argument("--profile", default="diary", help="profiles JSON에 정의한 ID, 기본 diary")
-    parser.add_argument("--date", help="일기 날짜 YYYY-MM-DD. 생략하면 서버의 한국 날짜 사용")
+    parser.add_argument("--profile", default="default", help="profiles JSON에 정의한 ID, 기본 default")
+    parser.add_argument("--date", help="자료에 연결할 날짜 YYYY-MM-DD. 생략하면 날짜를 지정하지 않음")
     parser.add_argument("--url", default="http://localhost:8000")
     parser.add_argument("--interactive", action="store_true", help="질문마다 번호로 답변 선택")
     args = parser.parse_args()

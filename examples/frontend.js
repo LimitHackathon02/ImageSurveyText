@@ -52,12 +52,6 @@ export async function createImageSurvey(files, profileId = "default", requestKey
   }));
 }
 
-// entryDate는 날짜 선택 input의 YYYY-MM-DD 값입니다.
-export async function createDiarySurvey(files, entryDate, requestKey = crypto.randomUUID()) {
-  if (!entryDate) throw new Error("일기 날짜를 선택하세요.");
-  return createImageSurvey(files, "diary", requestKey, entryDate);
-}
-
 // ANALYSIS_FAILED: 처음 올린 사진 전체를 같은 순서로 전달합니다.
 // SURVEY_FAILED: files 없이 호출합니다. 성공한 분석은 다시 호출하지 않습니다.
 export async function retryImageSurvey(sessionId, files = null) {

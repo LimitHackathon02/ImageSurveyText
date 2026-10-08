@@ -4,7 +4,7 @@ import hashlib
 import json
 import time
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from fastapi import HTTPException
 
@@ -19,7 +19,6 @@ from .survey_tasks import (
 
 # 이미지 분석·설문·답변 등을 합친 서버 입력 한도. 토큰 수와 같은 단위는 아닙니다.
 MAX_INPUT_CHARS = 24000
-KOREA_TIMEZONE = timezone(timedelta(hours=9))
 
 
 class SurveyService:
@@ -63,11 +62,9 @@ class SurveyService:
     async def create(self, raw, profile_id, request_key=None, entry_date=None):
         profile = self.get_profile(profile_id)
         images, hashes = self.prepare_images(raw, profile)
-        if entry_date is None:
-            entry_date = datetime.now(KOREA_TIMEZONE).date()
         try:
             entry_date = date.fromisoformat(entry_date) if isinstance(entry_date, str) else entry_date
-            day = entry_date.isoformat()
+            day = entry_date.isoformat() if entry_date is not None else None
         except (ValueError, AttributeError):
             raise HTTPException(422, "entry_date는 YYYY-MM-DD 형식의 날짜여야 합니다.") from None
         prompts = self.factory.snapshot()
@@ -144,7 +141,7 @@ class SurveyService:
                 usable = [photo for photo in session["images"] if photo["analysis"]["usable"]]
                 # 관찰 ID는 각 사진 안에서만 고유합니다. 중첩 구조로 출처를 유지합니다.
                 analysis = {"summary": "\n".join(f"{photo['image_id']}: {photo['analysis']['summary']}" for photo in usable),
-                            "usable": bool(usable), "issue": None if usable else "사용 가능한 일기·설문 자료가 없습니다. 다른 사진으로 새 세션을 만드세요.",
+                            "usable": bool(usable), "issue": None if usable else "사용 가능한 설문 자료가 없습니다. 다른 사진으로 새 세션을 만드세요.",
                             "images": [{"image_id": photo["image_id"], "analysis": photo["analysis"]} for photo in usable],
                             "excluded_images": [{"image_id": photo["image_id"], "issue": photo["analysis"]["issue"]}
                                                 for photo in session["images"] if not photo["analysis"]["usable"]]}
