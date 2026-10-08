@@ -22,10 +22,16 @@ def parse_output(text, schema):
             text = text[:-3].strip()
     try:
         value = json.loads(text)
+    except ValueError:
+        raise HTTPException(502, "AI 응답을 JSON으로 읽을 수 없습니다. 프롬프트/출력 토큰 한도를 확인하세요. 자동 재호출은 하지 않았습니다.") from None
+    try:
         Draft202012Validator(schema).validate(value)
-        return value
-    except (ValueError, ValidationError):
-        raise HTTPException(502, "AI 결과가 지정한 JSON 형식과 다릅니다. 프롬프트/출력 토큰 한도를 조정하세요. 자동 재호출은 하지 않았습니다.") from None
+    except ValidationError as error:
+        path = "$" + "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in error.absolute_path)
+        expected = f" (필요한 타입: {error.validator_value})" if error.validator == "type" else ""
+        # Report the field/rule, without returning model text or personal input.
+        raise HTTPException(502, f"AI JSON 형식 오류: {path[:200]} — {error.validator}{expected}. 자동 재호출은 하지 않았습니다.") from None
+    return value
 
 
 class Engine:

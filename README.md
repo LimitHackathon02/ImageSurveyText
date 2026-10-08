@@ -67,6 +67,10 @@ API와 CLI의 기본 profile은 `default`입니다. 모의 실행에서 이미�
 
 Swagger의 **이미지 설문** 묶음에서 직접 호출해도 됩니다. Windows 기본 Python에서는 `.venv/bin/python` 대신 `.venv\Scripts\python`을 사용하세요.
 
+Swagger 업로드는 `POST /api/image-surveys` → `Try it out`에서 진행합니다. 한 장이면 `image`에서 파일을 선택하고, 여러 장이면 `images`에서 파일을 선택하세요. **사용하지 않는 파일 필드의 `Send empty value`를 해제**하고 `profile_id`는 `default`로 둡니다. `entry_date`는 선택 입력이며 사용할 때만 `YYYY-MM-DD`를 넣습니다. `idempotency-key`는 중복 요청 방지가 필요할 때만, `x-team-key`는 서버의 `TEAM_API_KEY`가 설정됐을 때만 입력합니다. `Execute` 후 정상 응답은 201입니다.
+
+422가 나오면 Swagger의 `Response body`를 확인하세요. `detail`의 `loc`가 `body`, `images`로 시작하고 파일 대신 문자열이 들어갔다는 오류가 있으면 해당 입력을 확인하세요. 한 장 테스트에서는 `images`의 기존 항목을 오른쪽 `−` 버튼으로 모두 지워야 합니다. `Send empty value`를 해제해도 이미 입력된 항목은 요청에 포함됩니다. `image`와 `images`에 파일을 동시에 넣는 것도 거절됩니다. 코드를 수정한 뒤에는 서버를 재시작하고 `/docs`를 새로고침해야 새 파일 입력 명세가 반영됩니다.
+
 | 순서 | API | 입력·결과 |
 |---|---|---|
 | 설정 조회 | `GET /api/survey-profiles` | 선택할 주제 ID와 설정 목록 |
@@ -107,6 +111,8 @@ curl -X POST http://localhost:8000/api/image-surveys \
 `output.target_chars`는 공백·줄바꿈·제목을 포함한 `len(text)` 기준입니다. `default`는 1,500자 ±20%입니다. 길이는 모델 요청만으로 보장되지 않으므로 서버가 측정해 `COMPLETED` 또는 `NEEDS_REVIEW`를 반환합니다. 정보가 부족하면 사실성을 우선해 짧게 생성하고 검토 대상으로 표시할 수 있습니다. 글이 토큰 제한으로 잘리면 `GENERATION_FAILED`이며 완료 결과로 반환하지 않습니다.
 
 완료된 원본 글을 한 번 재작성하려면 `{"answers_revision": 1, "rewrite_of": "원본 generation_id"}`를 보냅니다. 같은 재작성 요청은 재사용하며 재작성 결과를 다시 재작성하는 것은 거절합니다. 실패한 생성은 같은 요청으로 명시적으로 재시도할 수 있고 자동 재호출은 없습니다.
+
+502 응답의 `status`가 `SURVEY_FAILED`이면 업로드 이후 설문 생성 단계가 실패한 것입니다. JSON 형식 오류는 `$.questions[0].options[0]`처럼 실패 위치와 검증 조건을 표시합니다. 선택지는 문자열 배열이 아니라 `{"label":"선택지 내용","is_unknown":false}` 객체 배열이어야 하며, 서버가 설문 프롬프트에 이 구조 예시를 추가합니다. 프롬프트 수정만으로 모든 모델 응답을 보장하지는 않으므로 검증은 유지합니다. 서버 코드를 수정했다면 재시작 후 `POST /api/image-surveys/{session_id}/retry`에 실패 응답의 ID를 넣고 **파일 없이** 호출하세요. 저장된 분석을 CLOVA로 전달해 설문만 다시 생성하므로 이미지 분석을 반복하지 않습니다.
 
 생성 요청 중에는 중복 생성·답변 수정을 409로 거절합니다. 세션 생성에 `Idempotency-Key` 헤더를 지정하고 재전송 시 같은 키·사진 순서·날짜를 유지하면 중복 세션을 방지합니다. 실패 응답의 `detail`에는 `session_id`와 실패 상태, 해당 사진이 있으면 `image_id`가 들어갑니다. `ANALYSIS_FAILED` 재시도에는 원래 사진 **전체를 같은 순서로** 다시 업로드합니다. 이미 성공한 분석은 재사용하고 실패·미처리 사진만 호출합니다. 원본 사진을 저장하지 않으므로 프론트엔드가 재시도용 파일을 유지해야 합니다. `SURVEY_FAILED`는 파일 없이 `/retry`를 호출합니다. 날짜·사진을 바꾸려면 새 세션을 만드세요.
 

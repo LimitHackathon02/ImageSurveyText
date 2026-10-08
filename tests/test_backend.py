@@ -22,6 +22,28 @@ def client(app):
         yield client
 
 
+def test_swagger_file_fields_have_binary_schema(client):
+    schema = client.get("/openapi.json").json()
+    fields = {
+        "/api/image-surveys": ["image", "images"],
+        "/api/image-surveys/{session_id}/retry": ["image", "images"],
+        "/api/vision": ["file"],
+        "/api/documents/upload": ["file"],
+    }
+    for path, names in fields.items():
+        body = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+        properties = schema["components"]["schemas"][body["$ref"].split("/")[-1]]["properties"]
+        for name in names:
+            field = properties[name]
+            # Swagger reads array.items directly when choosing the upload widget.
+            assert "anyOf" not in field
+            if name in {"image", "images"}:
+                assert name not in schema["components"]["schemas"][body["$ref"].split("/")[-1]].get("required", [])
+            if field["type"] == "array":
+                field = field["items"]
+            assert field["type"] == "string" and field["format"] == "binary"
+
+
 def stub_result(output, finish="stop", usage=None):
     return {"message": {"content": output}, "finishReason": finish,
             "usage": {"promptTokens": 10, "completionTokens": 5} if usage is None else usage}

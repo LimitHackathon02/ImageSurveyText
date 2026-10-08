@@ -202,6 +202,37 @@ def test_idempotency_key_prevents_duplicate_session(client):
                        headers={"Idempotency-Key": "image-1"}).status_code == 409
 
 
+def test_swagger_upload_with_unused_fields_and_blank_header(client):
+    # A text value in images is not a file, even if image contains a valid PNG.
+    invalid = client.post("/api/image-surveys", files={"image": ("photo.png", photo(), "image/png")},
+                          data={"images": "not-a-file", "profile_id": "default"})
+    assert invalid.status_code == 422
+    location = invalid.json()["detail"][0]["loc"]
+    assert location[:2] == ["body", "images"] and location[-1] == 0
+    # Deselecting the unused images field and leaving the optional header blank works.
+    first = create(client, headers={"Idempotency-Key": ""})
+    second = create(client, headers={"Idempotency-Key": ""})
+    assert first["session_id"] != second["session_id"]
+    assert first["status"] == "SURVEY_READY"
+    assert client.post("/api/image-surveys", files={"image": ("photo.png", photo(), "image/png")},
+                       headers={"Idempotency-Key": "x" * 151}).status_code == 422
+
+
+def test_swagger_empty_file_array_placeholder(client):
+    single = client.post("/api/image-surveys", files={"image": ("photo.png", photo(), "image/png")},
+                         data={"images": ""})
+    assert single.status_code == 201, single.text
+    assert len(single.json()["images"]) == 1
+    multiple = client.post("/api/image-surveys", files=[
+        ("images", (None, "")),
+        ("images", ("first.png", photo(), "image/png")),
+        ("images", ("second.png", photo("black"), "image/png")),
+    ])
+    assert multiple.status_code == 201, multiple.text
+    assert len(multiple.json()["images"]) == 2
+    assert client.post("/api/image-surveys", data={"images": ""}).status_code == 422
+
+
 def test_invalid_image_profile_and_auth(client, tmp_path):
     assert client.post("/api/image-surveys", files={"image": ("bad.png", b"bad")}).status_code == 422
     assert client.post("/api/image-surveys", files={"image": ("photo.png", photo())}, data={"profile_id": "../../.env"}).status_code == 404
@@ -298,6 +329,27 @@ def test_invalid_survey_not_cached_and_retry_skips_analysis(app, client, monkeyp
     assert retried.status_code == 200 and retried.json()["status"] == "SURVEY_READY"
     assert [c["stage"] for c in calls] == ["analysis", "survey", "survey"]
     assert client.get("/api/usage").json()["total_tokens"] == 45
+
+
+def test_string_choices_report_path_and_retry_skips_analysis(app, client, monkeypatch):
+    fail = True
+    def choices_as_strings(stage, output):
+        if stage == "survey" and fail:
+            output["questions"][0]["options"] = ["응답 원문은 오류에 노출하지 않음"] * 3
+        return output, "stop"
+    calls = live_stub(app, monkeypatch, choices_as_strings)
+    response = client.post("/api/image-surveys", files={"image": ("photo.png", photo())})
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["status"] == "SURVEY_FAILED"
+    assert "$.questions[0].options[0]" in detail["message"]
+    assert "object" in detail["message"]
+    assert "응답 원문은" not in detail["message"]
+    assert [call["stage"] for call in calls] == ["analysis", "survey"]
+    fail = False
+    retried = client.post(f"/api/image-surveys/{detail['session_id']}/retry")
+    assert retried.status_code == 200 and retried.json()["status"] == "SURVEY_READY"
+    assert [call["stage"] for call in calls] == ["analysis", "survey", "survey"]
 
 
 def test_short_text_and_one_rewrite(app, client, monkeypatch):

@@ -1,17 +1,35 @@
 import hmac
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, WithJsonSchema, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from .engine import Engine
 from .images import image_data_uri, read_survey_uploads
 from .settings import Settings
 from .survey import SurveyService
 from .survey_models import AnswersRequest, GenerateRequest
+
+
+# Keep file schemas directly on the field/items for Swagger's multipart widgets.
+# SkipJsonSchema[None] hides the null branch only; omitted uploads remain valid.
+BinaryUpload = Annotated[UploadFile, WithJsonSchema({"type": "string", "format": "binary"})]
+OptionalUpload = BinaryUpload | SkipJsonSchema[None]
+
+
+def omit_empty_uploads(value):
+    # Swagger can send images="" after the last array item is removed.
+    # Ignore only empty placeholders; nonempty text still fails file validation.
+    if isinstance(value, list):
+        return [item for item in value if not (isinstance(item, str) and item == "")] or None
+    return None if isinstance(value, str) and value == "" else value
+
+
+OptionalUploads = Annotated[list[BinaryUpload] | SkipJsonSchema[None], BeforeValidator(omit_empty_uploads)]
 
 
 class Turn(BaseModel):
@@ -68,12 +86,13 @@ def create_app(settings=None):
         return list(surveys.profiles.values())
 
     @app.post("/api/image-surveys", status_code=201, tags=["이미지 설문"], **api)
-    async def survey_create(image: UploadFile | None = File(default=None), images: list[UploadFile] | None = File(default=None),
+    async def survey_create(image: OptionalUpload = File(default=None, description="사진 한 장. images와 함께 보내지 마세요."),
+                            images: Annotated[OptionalUploads, File(description="사진 여러 장. image는 비워 두고 보내지 마세요.")] = None,
                             profile_id: str = Form("default", max_length=40), entry_date: date | None = Form(default=None),
-                            idempotency_key: str | None = Header(default=None, min_length=1, max_length=150)):
+                            idempotency_key: str | None = Header(default=None, max_length=150)):
         profile = surveys.get_profile(profile_id)
         raws = await read_survey_uploads(image, images, profile["image"])
-        return await surveys.create(raws, profile_id, idempotency_key, entry_date)
+        return await surveys.create(raws, profile_id, idempotency_key or None, entry_date)
 
     @app.get("/api/image-surveys/{session_id}", tags=["이미지 설문"], **api)
     async def survey_get(session_id: str):
@@ -88,8 +107,8 @@ def create_app(settings=None):
         return await surveys.generate(session_id, body)
 
     @app.post("/api/image-surveys/{session_id}/retry", tags=["이미지 설문"], **api)
-    async def survey_retry(session_id: str, image: UploadFile | None = File(default=None),
-                           images: list[UploadFile] | None = File(default=None)):
+    async def survey_retry(session_id: str, image: OptionalUpload = File(default=None),
+                           images: Annotated[OptionalUploads, File()] = None):
         raws = None
         if image is not None or images:
             session = surveys.repo.get(session_id)
@@ -114,7 +133,8 @@ def create_app(settings=None):
         return await engine.run(body.task, body.text, body.context, [t.model_dump() for t in body.history], cache=body.use_cache)
 
     @app.post("/api/vision", **api)
-    async def vision(file: UploadFile = File(...), question: str = Form("사진에서 확인되는 정보와 다음 행동을 정리해줘.", min_length=1, max_length=2000),
+    async def vision(file: UploadFile = File(..., json_schema_extra={"format": "binary"}),
+                     question: str = Form("사진에서 확인되는 정보와 다음 행동을 정리해줘.", min_length=1, max_length=2000),
                      task: str = Form("image_analyze", max_length=80), use_cache: bool = Form(True)):
         raw = await file.read(10 * 1024 * 1024 + 1)
         if len(raw) > 10 * 1024 * 1024:
@@ -135,7 +155,7 @@ def create_app(settings=None):
         return add_document(body.title, body.text)
 
     @app.post("/api/documents/upload", **api)
-    async def document_upload(file: UploadFile = File(...)):
+    async def document_upload(file: UploadFile = File(..., json_schema_extra={"format": "binary"})):
         name = file.filename or "document.txt"
         if not name.lower().endswith((".txt", ".md")):
             raise HTTPException(422, "UTF-8 .txt/.md를 지원합니다. PDF 내용은 텍스트로 붙여 넣으세요.")

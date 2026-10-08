@@ -127,6 +127,7 @@ class TaskFactory:
         stage = {"image_analysis": "image", "survey_generation": "survey", "text_generation": "output"}[name]
         model = {"image_analysis": Analysis, "survey_generation": SurveyDraft, "text_generation": TextDraft}[name]
         schema = model.model_json_schema()
+        format_hint = ""
         if name == "survey_generation":
             config = profile["survey"]
             schema["properties"]["questions"].update(minItems=config["question_count"], maxItems=config["question_count"])
@@ -135,10 +136,25 @@ class TaskFactory:
             qprops["question"]["maxLength"] = config["question_max_chars"]
             qprops["options"].update(minItems=config["min_options"], maxItems=config["max_options"])
             schema["$defs"]["OptionDraft"]["properties"]["label"]["maxLength"] = config["option_max_chars"]
+            options = [{"label": f"선택지 {i + 1}", "is_unknown": False} for i in range(config["min_options"])]
+            if config["include_unknown_option"]:
+                options[-1] = {"label": "아직 정하지 않았어요", "is_unknown": True}
+            example = {"questions": [
+                {"slot": config["slots"][i % len(config["slots"])], "question": f"{i + 1}번째 질문 내용", "options": options}
+                for i in range(config["question_count"])
+            ]}
+            format_hint = (
+                "\n설문 출력 형식: 최상위에는 questions 배열만 둡니다. 각 질문에는 slot, question, options만 둡니다. "
+                "options의 각 원소는 문자열이 아니라 label(문자열), is_unknown(불리언) 두 필드를 가진 객체입니다. "
+                "is_unknown은 따옴표 없는 true 또는 false이며 모든 선택지에 반드시 포함하세요. id, type, required 등 다른 필드는 넣지 마세요. "
+                f"아래는 전체 설문의 구조 예시이며 실제 출력에도 반드시 질문 {config['question_count']}개와 모든 slots를 포함하세요. "
+                "예시 문구를 복사하지 말고 실제 이미지 분석과 주제에 맞게 질문과 선택지 내용을 새로 작성하세요.\n"
+                + json.dumps(example, ensure_ascii=False)
+            )
         if name == "text_generation":
             sections = profile["output"]["sections"]
             schema["properties"]["sections"].update(minItems=len(sections), maxItems=len(sections))
             schema["$defs"]["SectionDraft"]["properties"]["id"]["enum"] = [s["id"] for s in sections]
-        return {"prompt": prompts[name] + "\n주제별 설정:\n" + json.dumps(profile, ensure_ascii=False),
+        return {"prompt": prompts[name] + "\n주제별 설정:\n" + json.dumps(profile, ensure_ascii=False) + format_hint,
                 "schema": schema, "max_tokens": profile[stage]["max_tokens"],
                 "temperature": profile[stage]["temperature"], "mock_output": fixture}
